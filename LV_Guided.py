@@ -7,15 +7,21 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy import stats
 
 # Particles package
 import particles
 from particles import state_space_models as ssm
 from particles import distributions as dists
+from particles.collectors import Moments
+
+## Constants ##
+DELTA_T = 5 # Data collected every DELTA_T-th time.
+K = 0.8 # Nudge factor of guided PF
 
 def get_obs(t):
     """ Returns true if an observation is aquired at this time. """
-    return True #t % 10 == 0 and t > 0
+    return t % DELTA_T == 0 and t > 0
 
 class LotkaVolterra(ssm.StateSpaceModel):
     """
@@ -50,17 +56,64 @@ class LotkaVolterra(ssm.StateSpaceModel):
             return dists.FlatNormal(loc=np.zeros(len(x)))
 
 class LotkaVolterra_proposal(LotkaVolterra):
-    def proposal0(self, data):
-        return self.PX0() # No data at t=0
-    def proposal(self, t, xp, data):
-        if np.isnan(data[t]): # data[t]?
+    def proposal0(self, data): # t = 0
+        if np.isnan(data[0]):
+            return self.PX0()
+        else:
+            return self.PX0() # EDIT
+    def proposal(self, t, xp, data): # t >= 1
+        if np.isnan(data[t]):
+            k = DELTA_T - t % DELTA_T
+            prop_ps = np.array([])
+            for p in xp:
+                mu0 = self.h * (self.beta * np.exp(p[1]) - self.alpha) + p[0]
+                mu1 = self.h * (self.gamma - self.delta * np.exp(p[0])) + p[1]
+                np.append(prop_ps, np.array([mu0, mu1]))
+            prop_ps_t_pred = np.array([p[0] for p in prop_ps])
+            for _ in range(k):
+                for i in range(len(prop_ps)):
+                    next_mu0 = self.h * (self.beta * np.exp(prop_ps[i][1]) - self.alpha) + prop_ps[i][0]
+                    next_mu1 = self.h * (self.gamma - self.delta * np.exp(prop_ps[i][0])) + prop_ps[i][1]
+                    prop_ps[i] = np.array([next_mu0, next_mu1])
+            weights = np.array([])
+            if not get_obs(t+k): # To check
+                raise Exception("t + k is not where data is!")
+            for p in prop_ps:
+                np.append(weights, stats.binom.pmf(data[t+k],
+                                               np.rint(np.exp(p[0])).astype(int),
+                                               self.theta))
+            weights = weights / np.sum(weights) # Normalise weights
+            data_t_est = np.sum(prop_ps_t_pred * weights)
+            
+            mu0 = self.h * (self.beta * np.exp(xp[:,1]) - self.alpha) + xp[:,0]
+            mu1 = self.h * (self.gamma - self.delta * np.exp(xp[:,0])) + xp[:,1]
+            nudge = K * (data_t_est - mu0)
+            new_mu0 = mu0 + nudge
+            return dists.MvNormal(loc=np.vstack((new_mu0,mu1)).T,
+                              scale=np.array([self.sigma, self.tau]))
+        else:
+            mu0 = self.h * (self.beta * np.exp(xp[:,1]) - self.alpha) + xp[:,0]
+            mu1 = self.h * (self.gamma - self.delta * np.exp(xp[:,0])) + xp[:,1]
+            nudge = K * (np.log(data[t] / self.theta) - mu0)
+            new_mu0 = mu0 + nudge
+            return dists.MvNormal(loc=np.vstack((new_mu0,mu1)).T,
+                              scale=np.array([self.sigma, self.tau]))
+
+class LotkaVolterra_proposal2(LotkaVolterra):
+    def proposal0(self, data): # t = 0
+        if np.isnan(data[0]):
+            return self.PX0()
+        else:
+            return self.PX0() # EDIT
+    def proposal(self, t, xp, data): # t >= 1
+        if np.isnan(data[t]):
             return self.PX(t, xp)
-        mu0 = self.h * (self.beta * np.exp(xp[:,1]) - self.alpha) + xp[:,0]
-        mu1 = self.h * (self.gamma - self.delta * np.exp(xp[:,0])) + xp[:,1]
-        K = 0.8
-        nudge = K * (np.log(data[t] / self.theta) - mu0)
-        new_mu0 = mu0 + nudge
-        return dists.MvNormal(loc=np.vstack((new_mu0,mu1)).T,
+        else:
+            mu0 = self.h * (self.beta * np.exp(xp[:,1]) - self.alpha) + xp[:,0]
+            mu1 = self.h * (self.gamma - self.delta * np.exp(xp[:,0])) + xp[:,1]
+            nudge = K * (np.log(data[t] / self.theta) - mu0)
+            new_mu0 = mu0 + nudge
+            return dists.MvNormal(loc=np.vstack((new_mu0,mu1)).T,
                               scale=np.array([self.sigma, self.tau]))
 
 ## Define parameters ##
@@ -90,7 +143,7 @@ for i in range(T+1): # pop or log-pop
         pred_vals.append(pred)
         prey_vals.append(prey)
 
-#%%
+# %%
 ## Plot simulation results ##
 
 fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(10,6))
@@ -115,45 +168,54 @@ ax2.grid(True)
 plt.tight_layout()
 plt.show()
 
-#%%
+# %%
 ## Bootstrap Particle Filter ##
 
 # Create and run particle filter
 fk_boot = ssm.Bootstrap(ssm=lv_ssm, data=data)
-pf_boot = particles.SMC(fk=fk_boot, N=1000, resampling='stratified', store_history=True)
+pf_boot = particles.SMC(fk=fk_boot, N=1000, resampling='stratified', 
+                        store_history=True, collect=[Moments()])
 pf_boot.run()
 
-#%%
+# %%
 ## Guided Particle Filter ##
 
 fk_guided = ssm.GuidedPF(ssm=lv_ssm, data=data)
-pf_guided = particles.SMC(fk=fk_guided, N=1000, resampling='stratified', store_history=True)
+pf_guided = particles.SMC(fk=fk_guided, N=1000, resampling='stratified', 
+                          store_history=True, collect=[Moments()])
 pf_guided.run()
 
-#%%
+# %%
 
 #pf_both = particles.multiSMC(fk={'boot':fk_boot, 'guided':fk_guided},
 #                             nruns=20, nprocs=1, out_func=outf)
 
-#%%
+# %%
 
 ## Plot histograms, box-plots, and KDEs at t = n ##
-n = 21
+n = 20
+n += 1
 
 ## Box plots ##
 
 # Predator
 plt.boxplot([pf_boot.hist.X[n][:, 0], pf_guided.hist.X[n][:, 0]],
-            labels=["Boot PF", "Guided PF"])
+            tick_labels=["Boot PF", "Guided PF"])
+plt.scatter([1, 2], [pred_vals[n], pred_vals[n]], color='red', 
+            marker='x', s=100, label='True log-pop')
 plt.title('Predator Log-Population Filtering Dists @ t=n')
 plt.ylabel('Log-pop')
+plt.legend()
 plt.show()
 
 # Prey
 plt.boxplot([pf_boot.hist.X[n][:, 1], pf_guided.hist.X[n][:, 1]],
-            labels=["Boot PF", "Guided PF"])
+            tick_labels=["Boot PF", "Guided PF"])
+plt.scatter([1, 2], [prey_vals[n], prey_vals[n]], color='red', 
+            marker='x', s=100, label='True log-pop')
 plt.title('Prey Log-Population Filtering Dists @ t=n')
 plt.ylabel('Log-pop')
+plt.legend()
 plt.show()
 
 ## KDEs ##
@@ -164,6 +226,8 @@ sns.kdeplot(pf_boot.hist.X[n][:, 0], ax=ax, fill=True,
             color="skyblue", label="Boot")
 sns.kdeplot(pf_guided.hist.X[n][:, 0], ax=ax, fill=True,
             color="lightcoral", label="Guided")
+ax.axvline(x=pred_vals[n], color='red', linestyle=':', linewidth=1.5, 
+           label='True log-pop')
 ax.set_xlabel("Log-pop")
 ax.set_ylabel("Density")
 ax.set_title("Predator Log-Population Filtering Dists @ t=n")
@@ -177,6 +241,8 @@ sns.kdeplot(pf_boot.hist.X[n][:, 1], ax=ax, fill=True,
             color="skyblue", label="Boot")
 sns.kdeplot(pf_guided.hist.X[n][:, 1], ax=ax, fill=True,
             color="lightcoral", label="Guided")
+ax.axvline(x=prey_vals[n], color='red', linestyle=':', linewidth=1.5, 
+           label='True log-pop')
 ax.set_xlabel("Log-pop")
 ax.set_ylabel("Density")
 ax.set_title("Prey Log-Population Filtering Dists @ t=n")
@@ -184,31 +250,107 @@ ax.legend()
 plt.grid(True, linestyle='--', alpha=0.7)
 plt.show()
 
-## Histograms ##
+# =============================================================================
+# ## Histograms ##
+# 
+# # Predator
+# fig, ax = plt.subplots(figsize=(8, 6))
+# ax.hist(pf_boot.hist.X[n][:, 0], bins=30, alpha=0.5, label='Boot',
+#         color='skyblue', density=True)
+# ax.hist(pf_guided.hist.X[n][:, 0], bins=30, alpha=0.5, label='Guided', 
+#         color='salmon', density=True)
+# ax.set_title("Predator Log-Population Filtering Dists @ t=n")
+# ax.set_xlabel("Log-pop")
+# ax.set_ylabel('Density')
+# ax.legend()
+# plt.grid(True, linestyle='--', alpha=0.7)
+# plt.show()
+# 
+# # Prey
+# fig, ax = plt.subplots(figsize=(8, 6))
+# ax.hist(pf_boot.hist.X[n][:, 1], bins=30, alpha=0.5, label='Boot',
+#         color='skyblue', density=True)
+# ax.hist(pf_guided.hist.X[n][:, 1], bins=30, alpha=0.5, label='Guided', 
+#         color='salmon', density=True)
+# ax.set_title("Prey Log-Population Filtering Dists @ t=n")
+# ax.set_xlabel("Log-pop")
+# ax.set_ylabel('Density')
+# ax.legend()
+# plt.grid(True, linestyle='--', alpha=0.7)
+# plt.show()
+# =============================================================================
 
-# Predator
-fig, ax = plt.subplots(figsize=(8, 6))
-ax.hist(pf_boot.hist.X[n][:, 0], bins=30, alpha=0.5, label='Boot',
-        color='skyblue', density=True)
-ax.hist(pf_guided.hist.X[n][:, 0], bins=30, alpha=0.5, label='Guided', 
-        color='salmon', density=True)
-ax.set_title("Predator Log-Population Filtering Dists @ t=n")
-ax.set_xlabel("Log-pop")
-ax.set_ylabel('Density')
-ax.legend()
-plt.grid(True, linestyle='--', alpha=0.7)
+# %%
+## Filtering interval plots ##
+
+means_boot =  np.stack([m['mean'] for m in pf_boot.summaries.moments])
+vars_boot = np.stack([m['var'] for m in pf_boot.summaries.moments])
+means_guided =  np.stack([m['mean'] for m in pf_guided.summaries.moments])
+vars_guided = np.stack([m['var'] for m in pf_guided.summaries.moments])
+
+# Plot up to t = t_plot_max (instead of T)
+t_plot_max = 50
+t_plot_max += 1
+t_plot_values = range(t_plot_max)
+
+## Bootstrap ##
+
+plt.plot(t_plot_values, pred_vals[0:t_plot_max], label="Predator", color="red")
+plt.plot(means_boot[0:t_plot_max,0], color="orange", label="PF means")
+plt.fill_between(t_plot_values, 
+                 y1=means_boot[0:t_plot_max,0]-2*np.sqrt(vars_boot[0:t_plot_max,0]), 
+                 y2=means_boot[0:t_plot_max,0]+2*np.sqrt(vars_boot[0:t_plot_max,0]), 
+                 color="orange", alpha=0.3)
+plt.ylabel("log-population")
+plt.xlabel("t")
+plt.title("Bootstrap")
+plt.legend()
+#plt.ylim(3.7, 4.2)
+plt.grid(True)
 plt.show()
 
-# Prey
-fig, ax = plt.subplots(figsize=(8, 6))
-ax.hist(pf_boot.hist.X[n][:, 1], bins=30, alpha=0.5, label='Boot',
-        color='skyblue', density=True)
-ax.hist(pf_guided.hist.X[n][:, 1], bins=30, alpha=0.5, label='Guided', 
-        color='salmon', density=True)
-ax.set_title("Prey Log-Population Filtering Dists @ t=n")
-ax.set_xlabel("Log-pop")
-ax.set_ylabel('Density')
-ax.legend()
-plt.grid(True, linestyle='--', alpha=0.7)
+plt.plot(t_plot_values, prey_vals[0:t_plot_max], label="Prey", color="blue")
+plt.plot(means_boot[0:t_plot_max,1], color="skyblue", label="PF means")
+plt.fill_between(t_plot_values, 
+                 y1=means_boot[0:t_plot_max,1]-2*np.sqrt(vars_boot[0:t_plot_max,1]), 
+                 y2=means_boot[0:t_plot_max,1]+2*np.sqrt(vars_boot[0:t_plot_max,1]), 
+                 color="skyblue", alpha=0.3)
+plt.xlabel("t")
+plt.ylabel("log-population")
+plt.title("Bootstrap")
+plt.legend()
+plt.grid(True)
 plt.show()
+
+## Guided ##
+
+plt.plot(t_plot_values, pred_vals[0:t_plot_max], label="Predator", color="red")
+plt.plot(means_guided[0:t_plot_max,0], color="orange", label="PF means")
+plt.fill_between(t_plot_values, 
+                 y1=means_guided[0:t_plot_max,0]-2*np.sqrt(vars_guided[0:t_plot_max,0]), 
+                 y2=means_guided[0:t_plot_max,0]+2*np.sqrt(vars_guided[0:t_plot_max,0]), 
+                 color="orange", alpha=0.3)
+plt.ylabel("log-population")
+plt.xlabel("t")
+plt.title("Guided")
+plt.legend()
+#plt.ylim(3.7, 4.2)
+plt.grid(True)
+plt.show()
+
+plt.plot(t_plot_values, prey_vals[0:t_plot_max], label="Prey", color="blue")
+plt.plot(means_guided[0:t_plot_max,1], color="skyblue", label="PF means")
+plt.fill_between(t_plot_values, 
+                 y1=means_guided[0:t_plot_max,1]-2*np.sqrt(vars_guided[0:t_plot_max,1]), 
+                 y2=means_guided[0:t_plot_max,1]+2*np.sqrt(vars_guided[0:t_plot_max,1]), 
+                 color="skyblue", alpha=0.3)
+plt.xlabel("t")
+plt.ylabel("log-population")
+plt.title("Guided")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
+
 
