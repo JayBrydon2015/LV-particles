@@ -17,7 +17,7 @@ from particles.collectors import Moments
 
 ## Constants ##
 DELTA_T = 2 # Data collected every DELTA_T-th time.
-K = 0.8 # Nudge factor of guided P
+K = 0.08 # Nudge factor of guided P
 
 def get_obs(t):
     """ Returns true if an observation is aquired at this time. """
@@ -240,12 +240,23 @@ plt.show()
 
 ## KDEs ##
 
+plt.figure()
+plt.subplot(311)
+plt.hist(pf_boot.hist.X[n], weights=pf_boot.hist.wgts[n].W)
+plt.xlim([0,6])
+plt.subplot(312)
+plt.hist(pf_guided.hist.X[n], weights=pf_guided.hist.wgts[n].W)
+plt.xlim([0,6])
+plt.subplot(313)
+plt.hist(pf_guided_lf.hist.X[n], weights=pf_guided_lf.hist.wgts[n].W)
+plt.xlim([0,6])
+
 fig, ax = plt.subplots(figsize=(8, 6))
-sns.kdeplot(pf_boot.hist.X[n], ax=ax, fill=True,
+sns.kdeplot(pf_boot.hist.X[n], weights=pf_boot.hist.wgts[n].W, ax=ax, fill=True,
             color="skyblue", label="Boot")
-sns.kdeplot(pf_guided.hist.X[n], ax=ax, fill=True,
+sns.kdeplot(pf_guided.hist.X[n], weights=pf_guided.hist.wgts[n].W, ax=ax, fill=True,
             color="lightcoral", label="Guided")
-sns.kdeplot(pf_guided_lf.hist.X[n], ax=ax, fill=True,
+sns.kdeplot(pf_guided_lf.hist.X[n], weights=pf_guided_lf.hist.wgts[n].W, ax=ax, fill=True,
             color="gold", label="Guided-LF")
 ax.axvline(x=true_states[n], color='red', linestyle=':', linewidth=1.5, 
            label='True state')
