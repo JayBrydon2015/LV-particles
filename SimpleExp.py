@@ -17,7 +17,7 @@ from particles.collectors import Moments
 
 ## Constants ##
 DELTA_T = 2 # Data collected every DELTA_T-th time.
-K = 0.8 # Nudge factor of guided P
+K = 0.08 # Nudge factor of guided P
 
 def get_obs(t):
     """ Returns true if an observation is aquired at this time. """
@@ -109,7 +109,7 @@ t_obs = [t for t in range(T+1) if get_obs(t)]
 t_system = range(T+1)
 
 ## Number of particles for PFs ##
-N = 100
+N = 10000
 
 seg_ssm = SimpleExpGrowth_proposal(mu0 = mu0, sigma0 = sigma0, 
                           sigma = sigma, gamma = gamma, 
@@ -188,6 +188,7 @@ plt.title("Bootstrap PF band plot")
 means_guided =  np.stack([m['mean'] for m in pf_guided.summaries.moments])
 vars_guided = np.stack([m['var'] for m in pf_guided.summaries.moments])
 
+plt.figure()
 plt.plot(t_system, true_states, label="true state", color='red', alpha=0.7)
 plt.plot(means_guided, color="green", label="PF mean", alpha=0.7)
 plt.plot(t_obs, data_clean, label="observation", color='blue', alpha=0.3,
@@ -207,6 +208,7 @@ plt.title("Guided PF band plot")
 means_guided_lf =  np.stack([m['mean'] for m in pf_guided_lf.summaries.moments])
 vars_guided_lf = np.stack([m['var'] for m in pf_guided_lf.summaries.moments])
 
+plt.figure()
 plt.plot(t_system, true_states, label="true state", color='red', alpha=0.7)
 plt.plot(means_guided_lf, color="green", label="PF mean", alpha=0.7)
 plt.plot(t_obs, data_clean, label="observation", color='blue', alpha=0.3,
@@ -227,8 +229,8 @@ n = 1
 
 ## Box plots ##
 
-plt.boxplot([pf_boot.hist.X[n], pf_guided.hist.X[n], pf_guided_lf.hist.X[n]],
-            tick_labels=["Boot PF", "Guided PF", "Guided-LF PF"])
+plt.figure()
+plt.boxplot([pf_boot.hist.X[n], pf_guided.hist.X[n], pf_guided_lf.hist.X[n]], labels=["Boot PF", "Guided PF", "Guided-LF PF"])
 plt.scatter([1, 2, 3], [true_states[n], true_states[n], true_states[n]], color='red', 
             marker='x', s=100, label='True state')
 plt.title('Filtering Dists @ t=n')
@@ -238,12 +240,23 @@ plt.show()
 
 ## KDEs ##
 
+plt.figure()
+plt.subplot(311)
+plt.hist(pf_boot.hist.X[n], weights=pf_boot.hist.wgts[n].W)
+plt.xlim([0,6])
+plt.subplot(312)
+plt.hist(pf_guided.hist.X[n], weights=pf_guided.hist.wgts[n].W)
+plt.xlim([0,6])
+plt.subplot(313)
+plt.hist(pf_guided_lf.hist.X[n], weights=pf_guided_lf.hist.wgts[n].W)
+plt.xlim([0,6])
+
 fig, ax = plt.subplots(figsize=(8, 6))
-sns.kdeplot(pf_boot.hist.X[n], ax=ax, fill=True,
+sns.kdeplot(pf_boot.hist.X[n], weights=pf_boot.hist.wgts[n].W, ax=ax, fill=True,
             color="skyblue", label="Boot")
-sns.kdeplot(pf_guided.hist.X[n], ax=ax, fill=True,
+sns.kdeplot(pf_guided.hist.X[n], weights=pf_guided.hist.wgts[n].W, ax=ax, fill=True,
             color="lightcoral", label="Guided")
-sns.kdeplot(pf_guided_lf.hist.X[n], ax=ax, fill=True,
+sns.kdeplot(pf_guided_lf.hist.X[n], weights=pf_guided_lf.hist.wgts[n].W, ax=ax, fill=True,
             color="gold", label="Guided-LF")
 ax.axvline(x=true_states[n], color='red', linestyle=':', linewidth=1.5, 
            label='True state')
